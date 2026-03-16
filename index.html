@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chatter</title>
+    <style>
+        body {
+            font-family: "SF Mono", Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", "Ubuntu Mono", "Source Code Pro", ui-monospace, monospace;
+            margin: 20px;
+        }
+        .container {
+            width: 90%;
+            margin: 0 auto;
+        }
+        #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+        .sent { color: blue; }
+        .received { color: green; }
+        input { padding: 5px; width: 100%; box-sizing: border-box; }
+        button { padding: 5px 10px; }
+        .inputRow { display: flex; gap: 8px; align-items: center; }
+        .inputRow input { flex: 1; }
+        #sendButton { flex: 0 0 auto; margin: 0; }
+        #status.disconnected { color: #c0392b; }
+        #status.connected { color: #1e8449; }
+        #loginPanel {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            border: 1px solid #ccc;
+            padding: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 320px;
+        }
+        #backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            z-index: 900;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Chatter</h2>
+        <div id="messages"></div>
+        <div class="inputRow">
+            <input type="text" id="messageInput" placeholder="Type your message...">
+            <button id="sendButton" onclick="sendMessage()">Send</button>
+        </div>
+        <p>Status: <span id="status" class="disconnected">Disconnected</span></p>
+    </div>
+    <div id="backdrop"></div>
+    <div id="loginPanel">
+        <input id="username" placeholder="username">
+        <input id="password" placeholder="password" type="password">
+        <button onclick="login();">Login</button>
+    </div>
+    <script>
+let socket = null;
+let key,username;
+let reconnectTimer = null;
+let lastConnState = 'disconnected';
+const input=document.getElementById('messageInput');
+const sendButton=document.getElementById('sendButton');
+const usernameInput=document.getElementById('username');
+const passwordInput=document.getElementById('password');
+function setSendEnabled(enabled){
+  input.disabled=!enabled;
+  sendButton.disabled=!enabled;
+}
+function updateStatus(status){
+  const statusEl=document.getElementById('status');
+  statusEl.textContent = status;
+  statusEl.className = (status === 'Connected') ? 'connected' : 'disconnected';
+  setSendEnabled(status === 'Connected');
+  lastConnState = status.toLowerCase();
+}
+updateStatus('Disconnected');
+input.addEventListener('keypress',function(e){if(e.key==='Enter'){sendMessage();}});
+usernameInput.addEventListener('keypress',function(e){
+  if(e.key==='Enter'){passwordInput.focus();}
+});
+passwordInput.addEventListener('keypress',function(e){
+  if(e.key==='Enter'){login();}
+});
+async function deriveKeyFromPassword(password) {
+  const buffer=new ArrayBuffer(16);
+  const view=new DataView(buffer);
+  view.setBigInt64(0,10811310621422132099n,false);
+  view.setBigInt64(8,125209334995201314n,false);
+  const salt = new Uint8Array(buffer);
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw',enc.encode(password),{name:'PBKDF2'},false,['deriveKey']);
+  const derivedKey = await crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:1000,hash:'SHA-256'},key,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return derivedKey;
+}
+async function encryptMessage(key, plaintext) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(plaintext);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({name:'AES-GCM',iv: iv,tagLength: 128},key,data);
+  const encryptedData=new Uint8Array(iv.length+ciphertext.byteLength);
+  encryptedData.set(iv,0);
+  encryptedData.set(new Uint8Array(ciphertext),iv.length);
+  return btoa(String.fromCharCode.apply(null,encryptedData));
+}
+async function decryptMessage(key, encryptedBase64) {
+  const encryptedData = Uint8Array.from(atob(encryptedBase64),c=>c.charCodeAt(0));
+  const iv=encryptedData.slice(0, 12);
+  const ciphertext=encryptedData.slice(12);
+  const decryptedData = await crypto.subtle.decrypt({name:'AES-GCM',iv:iv,tagLength:128},key,ciphertext);
+  const decoder = new TextDecoder();
+  return decoder.decode(decryptedData);
+}
+async function hashString(message) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+function connect() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    return;
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  socket = new WebSocket("ws://localhost:8080/ws");
+  socket.addEventListener('open', function (event) {
+    updateStatus('Connected');
+    clearMessages();
+    addMessage('Connected to server', 'system');
+  });
+  socket.addEventListener('message', async function (event) {
+    let data=JSON.parse(event.data);
+    console.log(data);
+    let decrypted=await decryptMessage(key,data.content);
+    let sender='Unknown';
+    let messageText=decrypted;
+    try{
+      const parsed=JSON.parse(decrypted);
+      if(parsed && typeof parsed === 'object'){
+        if(typeof parsed.sender === 'string'){sender=parsed.sender;}
+        if(typeof parsed.message === 'string'){messageText=parsed.message;}
+      }
+    }catch(e){
+      // fall back to raw decrypted text
+    }
+    const msgType = (sender === username) ? 'sent' : 'received';
+    addMessage(sender+': '+formatTimestamp(data.timestamp)+': '+messageText, msgType);
+  });
+  socket.addEventListener('close', function (event) {
+    updateStatus('Disconnected');
+    if (lastConnState !== 'disconnected') {
+      addMessage('Disconnected from server', 'system');
+    }
+    reconnectTimer = setTimeout(connect, 1000);
+  });
+  socket.addEventListener('error', function (event) {
+    if (lastConnState !== 'disconnected') {
+      addMessage('WebSocket error occurred', 'system');
+    }
+    console.error('WebSocket error:', event);
+  });
+}
+async function sendMessage() {
+  const value=input.value.trim();
+  if(!value){return;}
+  const payload=JSON.stringify({sender: username, message: value});
+  const message=await encryptMessage(key,payload);
+  if(!socket || socket.readyState !== WebSocket.OPEN) {return;}
+  socket.send(message);
+  input.value='';
+}
+function addMessage(text, type) {
+  const messages = document.getElementById('messages');
+  const messageElement = document.createElement('div');
+  messageElement.className = type;
+  messageElement.textContent = text;
+  messages.appendChild(messageElement);
+  messages.scrollTop = messages.scrollHeight;
+}
+function clearMessages() {
+  const messages = document.getElementById('messages');
+  messages.textContent = '';
+}
+function formatTimestamp(ts){
+  if(typeof ts !== 'string'){return '';}
+  const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?([+-]\d{2}:\d{2}|Z)?$/);
+  if(!m){return ts;}
+  const month = m[2];
+  const day = m[3];
+  const hh = m[4];
+  const mm = m[5];
+  const ss = m[6];
+  let offset = m[7] || '';
+  if(offset === 'Z'){offset = '+00:00';}
+  if(offset === '+08:00'){offset = '';}
+  return offset ? `${month}-${day} ${hh}:${mm}:${ss} (${offset})` : `${month}-${day} ${hh}:${mm}:${ss}`;
+}
+function login() {
+  username=document.getElementById('username').value;
+  let password=document.getElementById('password').value;
+  document.getElementById('loginPanel').style.display="none";
+  document.getElementById('backdrop').style.display="none";
+  deriveKeyFromPassword(password).then(enckey=>{decryptMessage(key=enckey,'cUk7/2bcfzyccoFMYRpeleqT5RvAu1LDoUWSg7jnDipNH0EJMxpuSWL2tKyP').catch(e=>{alert('Password incorrect!');location.href=location.href;});});
+  connect();
+}
+    </script>
+</body>
+</html>
