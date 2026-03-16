@@ -125,6 +125,11 @@ async function hashString(message) {
   const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   return hashHex;
 }
+function getWebSocketURL(){
+  const loc = window.location;
+  const scheme = (loc.protocol === 'https:') ? 'wss:' : 'ws:';
+  return `${scheme}//${loc.host}/ws`;
+}
 function connect() {
   if (socket && socket.readyState === WebSocket.OPEN) {
     return;
@@ -133,7 +138,7 @@ function connect() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  socket = new WebSocket("ws://localhost:8080/ws");
+  socket = new WebSocket(getWebSocketURL());
   socket.addEventListener('open', function (event) {
     updateStatus('Connected');
     clearMessages();
