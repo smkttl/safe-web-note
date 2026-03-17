@@ -70,6 +70,8 @@ let socket = null;
 let key,username;
 let reconnectTimer = null;
 let lastConnState = 'disconnected';
+let checkToken = '';
+let checkTokenError = '';
 const input=document.getElementById('messageInput');
 const sendButton=document.getElementById('sendButton');
 const usernameInput=document.getElementById('username');
@@ -92,6 +94,11 @@ usernameInput.addEventListener('keypress',function(e){
 });
 passwordInput.addEventListener('keypress',function(e){
   if(e.key==='Enter'){login();}
+});
+fetch('/check').then(r=>r.text()).then(token=>{
+  checkToken = token.trim();
+}).catch(e=>{
+  checkTokenError = 'Failed to load check token';
 });
 async function deriveKeyFromPassword(password) {
   const buffer=new ArrayBuffer(16);
@@ -221,8 +228,21 @@ function login() {
   let password=document.getElementById('password').value;
   document.getElementById('loginPanel').style.display="none";
   document.getElementById('backdrop').style.display="none";
-  deriveKeyFromPassword(password).then(enckey=>{decryptMessage(key=enckey,'cUk7/2bcfzyccoFMYRpeleqT5RvAu1LDoUWSg7jnDipNH0EJMxpuSWL2tKyP').catch(e=>{alert('Password incorrect!');location.href=location.href;});});
-  connect();
+  deriveKeyFromPassword(password).then(enckey=>{
+    if(checkTokenError){
+      alert(checkTokenError);
+      location.href=location.href;
+      return;
+    }
+    if(!checkToken){
+      alert('Check token not ready');
+      location.href=location.href;
+      return;
+    }
+    decryptMessage(key=enckey,checkToken).then(()=>{
+      connect();
+    }).catch(e=>{alert('Password incorrect!');location.href=location.href;});
+  });
 }
     </script>
 </body>

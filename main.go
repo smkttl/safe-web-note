@@ -40,6 +40,7 @@ type Server struct {
     file       *os.File
     fileMutex  sync.Mutex
     msgCounter int
+    checkToken string
 }
 
 var upgrader = websocket.Upgrader{
@@ -49,10 +50,14 @@ var upgrader = websocket.Upgrader{
 }
 
 // NewServer creates a new server instance
-func NewServer(filename string) (*Server, error) {
+func NewServer(filename string, checkFile string) (*Server, error) {
     file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
     if err != nil {
         return nil, fmt.Errorf("failed to open file: %v", err)
+    }
+    checkToken, err := os.ReadFile(checkFile)
+    if err != nil {
+        return nil, fmt.Errorf("failed to read check file: %v", err)
     }
 
     server := &Server{
@@ -62,6 +67,7 @@ func NewServer(filename string) (*Server, error) {
         broadcast:  make(chan []byte, 256),
         messages:   make([]Message, 0),
         file:       file,
+        checkToken: string(checkToken),
     }
 
     // Load existing messages from file
@@ -329,7 +335,7 @@ func (s *Server) Close() error {
 
 func main() {
     // Create server with message file
-    server, err := NewServer("messages.txt")
+    server, err := NewServer("messages.txt", "password_check.txt")
     if err != nil {
         log.Fatal("Failed to create server:", err)
     }
@@ -356,6 +362,11 @@ func main() {
         status := fmt.Sprintf("Server running\nConnected clients: %d\nTotal messages: %d\n",
             len(server.clients), server.msgCounter)
         w.Write([]byte(status))
+    })
+
+    http.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.Write([]byte(server.checkToken))
     })
     
     // Start HTTP server
