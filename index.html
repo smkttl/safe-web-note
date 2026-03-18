@@ -76,6 +76,53 @@ const input=document.getElementById('messageInput');
 const sendButton=document.getElementById('sendButton');
 const usernameInput=document.getElementById('username');
 const passwordInput=document.getElementById('password');
+function checkEnvironment(){
+  const issues = [];
+  if(!window.isSecureContext){
+    issues.push('Secure context required (HTTPS or localhost).');
+  }
+  if(!(window.crypto && crypto.subtle)){
+    issues.push('WebCrypto (crypto.subtle) not available.');
+  }
+  if(typeof TextEncoder === 'undefined' || typeof TextDecoder === 'undefined'){
+    issues.push('TextEncoder/TextDecoder not available.');
+  }
+  if(typeof WebSocket === 'undefined'){
+    issues.push('WebSocket not available.');
+  }
+  if(typeof fetch === 'undefined'){
+    issues.push('fetch not available.');
+  }
+  if(typeof DataView.prototype.setBigInt64 !== 'function'){
+    issues.push('BigInt64 DataView support not available.');
+  }
+  if(typeof BigInt === 'undefined'){
+    issues.push('BigInt not available.');
+  }
+  if(issues.length){
+    updateStatus('Disconnected');
+    setSendEnabled(false);
+    const messages = document.getElementById('messages');
+    messages.innerHTML = '';
+    const header = document.createElement('div');
+    header.textContent = 'Environment check failed:';
+    messages.appendChild(header);
+    for(const issue of issues){
+      const line = document.createElement('div');
+      line.textContent = `- ${issue}`;
+      messages.appendChild(line);
+    }
+    const uaLine = document.createElement('div');
+    uaLine.textContent = `User-Agent: ${navigator.userAgent || 'unknown'}`;
+    messages.appendChild(uaLine);
+    const panel = document.getElementById('loginPanel');
+    const backdrop = document.getElementById('backdrop');
+    if(panel){panel.style.display='none';}
+    if(backdrop){backdrop.style.display='none';}
+    return false;
+  }
+  return true;
+}
 function setSendEnabled(enabled){
   input.disabled=!enabled;
   sendButton.disabled=!enabled;
@@ -88,6 +135,7 @@ function updateStatus(status){
   lastConnState = status.toLowerCase();
 }
 updateStatus('Disconnected');
+const envOk = checkEnvironment();
 input.addEventListener('keypress',function(e){if(e.key==='Enter'){sendMessage();}});
 usernameInput.addEventListener('keypress',function(e){
   if(e.key==='Enter'){passwordInput.focus();}
@@ -95,11 +143,13 @@ usernameInput.addEventListener('keypress',function(e){
 passwordInput.addEventListener('keypress',function(e){
   if(e.key==='Enter'){login();}
 });
-fetch('/check').then(r=>r.text()).then(token=>{
-  checkToken = token.trim();
-}).catch(e=>{
-  checkTokenError = 'Failed to load check token';
-});
+if(envOk){
+  fetch('/check').then(r=>r.text()).then(token=>{
+    checkToken = token.trim();
+  }).catch(e=>{
+    checkTokenError = 'Failed to load check token';
+  });
+}
 async function deriveKeyFromPassword(password) {
   const buffer=new ArrayBuffer(16);
   const view=new DataView(buffer);
