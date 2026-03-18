@@ -19,6 +19,25 @@ go run .
 Open:
 - `http://localhost:8080/`
 
+## Systemd (User Service)
+
+Install and start the user service (run from the repo root):
+
+```bash
+bash install-service.sh
+```
+
+Useful commands:
+- `systemctl --user status safe-web-note.service`
+- `systemctl --user restart safe-web-note.service`
+- `systemctl --user stop safe-web-note.service`
+
+Uninstall:
+
+```bash
+bash uninstall-service.sh
+```
+
 ## How It Works
 - The browser derives a key from the password (PBKDF2) and encrypts each message using AES-GCM.
 - The server writes each encrypted message as one JSON line in `messages.txt`.
