@@ -42,6 +42,30 @@
             background: rgba(0, 0, 0, 0.45);
             z-index: 900;
         }
+        #popupBackdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            z-index: 1100;
+            display: none;
+        }
+        #popupPanel {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            border: 1px solid #ccc;
+            padding: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            z-index: 1200;
+            display: none;
+            width: 320px;
+            text-align: center;
+        }
+        #popupPanel button {
+            margin-top: 12px;
+        }
     </style>
 </head>
 <body>
@@ -60,6 +84,11 @@
         <input id="password" placeholder="password" type="password">
         <button onclick="login();">Login</button>
     </div>
+    <div id="popupBackdrop"></div>
+    <div id="popupPanel">
+        <div id="popupMessage"></div>
+        <button onclick="closePopup();">OK</button>
+    </div>
     <script>
 if (window.location.protocol === 'http:' &&
     window.location.hostname !== 'localhost' &&
@@ -76,6 +105,20 @@ const input=document.getElementById('messageInput');
 const sendButton=document.getElementById('sendButton');
 const usernameInput=document.getElementById('username');
 const passwordInput=document.getElementById('password');
+function showPopup(message){
+  const panel = document.getElementById('popupPanel');
+  const backdrop = document.getElementById('popupBackdrop');
+  const msg = document.getElementById('popupMessage');
+  msg.textContent = message;
+  panel.style.display = 'block';
+  backdrop.style.display = 'block';
+}
+function closePopup(){
+  const panel = document.getElementById('popupPanel');
+  const backdrop = document.getElementById('popupBackdrop');
+  panel.style.display = 'none';
+  backdrop.style.display = 'none';
+}
 function checkEnvironment(){
   const issues = [];
   if(!window.isSecureContext){
@@ -280,18 +323,18 @@ function login() {
   document.getElementById('backdrop').style.display="none";
   deriveKeyFromPassword(password).then(enckey=>{
     if(checkTokenError){
-      alert(checkTokenError);
+      showPopup(checkTokenError);
       location.href=location.href;
       return;
     }
     if(!checkToken){
-      alert('Check token not ready');
+      showPopup('Check token not ready');
       location.href=location.href;
       return;
     }
     decryptMessage(key=enckey,checkToken).then(()=>{
       connect();
-    }).catch(e=>{alert('Password incorrect!');location.href=location.href;});
+    }).catch(e=>{showPopup('Password incorrect!');location.href=location.href;});
   });
 }
     </script>
