@@ -21,10 +21,16 @@ Open:
 
 ## Systemd (User Service)
 
-Install and start the user service (run from the repo root):
+Install and start the service (run from the repo root):
 
 ```bash
 bash install-service.sh
+```
+
+To install as a system service (requires sudo):
+
+```bash
+sudo bash install-service.sh
 ```
 
 Useful commands:
@@ -36,6 +42,12 @@ Uninstall:
 
 ```bash
 bash uninstall-service.sh
+```
+
+Uninstall system service:
+
+```bash
+sudo bash uninstall-service.sh
 ```
 
 ## How It Works
