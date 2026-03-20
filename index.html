@@ -179,6 +179,9 @@ function updateStatus(status){
 }
 updateStatus('Disconnected');
 const envOk = checkEnvironment();
+if(envOk){
+  showPopup('Environment check passed.');
+}
 input.addEventListener('keypress',function(e){if(e.key==='Enter'){sendMessage();}});
 usernameInput.addEventListener('keypress',function(e){
   if(e.key==='Enter'){passwordInput.focus();}
