@@ -136,12 +136,6 @@ function checkEnvironment(){
   if(typeof fetch === 'undefined'){
     issues.push('fetch not available.');
   }
-  if(typeof DataView.prototype.setBigInt64 !== 'function'){
-    issues.push('BigInt64 DataView support not available.');
-  }
-  if(typeof BigInt === 'undefined'){
-    issues.push('BigInt not available.');
-  }
   if(issues.length){
     updateStatus('Disconnected');
     setSendEnabled(false);
@@ -197,11 +191,7 @@ if(envOk){
   });
 }
 async function deriveKeyFromPassword(password) {
-  const buffer=new ArrayBuffer(16);
-  const view=new DataView(buffer);
-  view.setBigInt64(0,10811310621422132099n,false);
-  view.setBigInt64(8,125209334995201314n,false);
-  const salt = new Uint8Array(buffer);
+  const salt = new Uint8Array([150,9,125,186,186,70,27,131,1,188,213,58,14,243,173,34]);
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw',enc.encode(password),{name:'PBKDF2'},false,['deriveKey']);
   const derivedKey = await crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:1000,hash:'SHA-256'},key,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
