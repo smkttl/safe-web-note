@@ -9,10 +9,32 @@ A tiny WebSocket chat with client-side AES-GCM encryption and a shared password.
 - On connect, server sends the last 25 messages
 - Simple single-page UI served from `/`
 
+## Dependencies
+
+Server/runtime:
+- Go `1.26.1+`
+- Go module: `github.com/gorilla/websocket v1.5.3`
+- Writable repo directory (server creates/appends `messages.txt`)
+- `password_check.txt` in repo root (required at startup, served by `/check`)
+- Available listen port `8080`
+
+Browser/client:
+- Secure context (`https://` or `localhost`)
+- `Web Crypto` (`crypto.subtle`)
+- `TextEncoder` / `TextDecoder`
+- `WebSocket`
+- `fetch`
+
+Optional (service management):
+- `bash`
+- `systemd` / `systemctl`
+- `sudo` (only for system-wide service install/uninstall)
+
 ## Quick Start
 
 ```bash
 # from the repo root
+printf 'change-me\n' > password_check.txt
 go run .
 ```
 
