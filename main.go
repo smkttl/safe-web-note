@@ -6,8 +6,10 @@ import (
     "encoding/json"
     "fmt"
     "log"
+    "net"
     "net/http"
     "os"
+    "strings"
     "sync"
     "time"
     "github.com/gorilla/websocket"
@@ -47,6 +49,60 @@ var upgrader = websocket.Upgrader{
     CheckOrigin: func(r *http.Request) bool {
         return true // Allow all origins for demo
     },
+}
+
+func normalizeIP(raw string) string {
+    candidate := strings.TrimSpace(raw)
+    if candidate == "" || strings.EqualFold(candidate, "unknown") {
+        return ""
+    }
+
+    if strings.HasPrefix(candidate, "[") && strings.HasSuffix(candidate, "]") {
+        candidate = candidate[1 : len(candidate)-1]
+    }
+
+    if ip := net.ParseIP(candidate); ip != nil {
+        return ip.String()
+    }
+
+    host, _, err := net.SplitHostPort(candidate)
+    if err == nil {
+        host = strings.TrimPrefix(host, "[")
+        host = strings.TrimSuffix(host, "]")
+        if ip := net.ParseIP(host); ip != nil {
+            return ip.String()
+        }
+    }
+
+    return ""
+}
+
+func getClientIP(r *http.Request, remoteAddr string) string {
+    headerNames := []string{
+        "CF-Connecting-IP",
+        "X-Real-IP",
+        "True-Client-IP",
+        "X-Forwarded-For",
+    }
+
+    for _, headerName := range headerNames {
+        raw := r.Header.Get(headerName)
+        if raw == "" {
+            continue
+        }
+
+        for _, part := range strings.Split(raw, ",") {
+            if ip := normalizeIP(part); ip != "" {
+                return ip
+            }
+        }
+    }
+
+    if ip := normalizeIP(remoteAddr); ip != "" {
+        return ip
+    }
+
+    return remoteAddr
 }
 
 // NewServer creates a new server instance
@@ -217,7 +273,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
     client := &Client{
         conn:   conn,
         send:   make(chan []byte, 256),
-        id:     conn.RemoteAddr().String(),
+        id:     getClientIP(r, conn.RemoteAddr().String()),
         ctx:    ctx,
         cancel: cancel,
     }
