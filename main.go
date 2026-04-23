@@ -1,18 +1,19 @@
 package main
 
 import (
-    "bufio"
-    "context"
-    "encoding/json"
-    "fmt"
-    "log"
-    "net"
-    "net/http"
-    "os"
-    "strings"
-    "sync"
-    "time"
-    "github.com/gorilla/websocket"
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Message represents a chat message
@@ -24,31 +25,38 @@ type Message struct {
 
 // Client represents a WebSocket client
 type Client struct {
-    conn     *websocket.Conn
-    send     chan []byte
-    id       string
-    ctx      context.Context
-    cancel   context.CancelFunc
+	conn   *websocket.Conn
+	send   chan []byte
+	id     string
+	name   string
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // Server manages WebSocket clients and message persistence
 type Server struct {
-    clients    map[*Client]bool
-    register   chan *Client
-    unregister chan *Client
-    broadcast  chan []byte
-    messages   []Message
-    mu         sync.RWMutex
-    file       *os.File
-    fileMutex  sync.Mutex
-    msgCounter int
-    checkToken string
+	clients    map[*Client]bool
+	register   chan *Client
+	unregister chan *Client
+	broadcast  chan []byte
+	messages   []Message
+	mu         sync.RWMutex
+	file       *os.File
+	fileMutex  sync.Mutex
+	msgCounter int
+	checkToken string
 }
 
 var upgrader = websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool {
-        return true // Allow all origins for demo
-    },
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for demo
+	},
+}
+
+type SystemEvent struct {
+	Type      string    `json:"type"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 func normalizeIP(raw string) string {
@@ -78,12 +86,12 @@ func normalizeIP(raw string) string {
 }
 
 func getClientIP(r *http.Request, remoteAddr string) string {
-    headerNames := []string{
-        "CF-Connecting-IP",
-        "X-Real-IP",
-        "True-Client-IP",
-        "X-Forwarded-For",
-    }
+	headerNames := []string{
+		"CF-Connecting-IP",
+		"X-Real-IP",
+		"True-Client-IP",
+		"X-Forwarded-For",
+	}
 
     for _, headerName := range headerNames {
         raw := r.Header.Get(headerName)
@@ -102,7 +110,43 @@ func getClientIP(r *http.Request, remoteAddr string) string {
         return ip
     }
 
-    return remoteAddr
+	return remoteAddr
+}
+
+func sanitizeUsername(raw string) string {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	runeCount := 0
+	for _, r := range name {
+		if runeCount >= 32 {
+			break
+		}
+		if r < 32 || r == 127 {
+			continue
+		}
+		b.WriteRune(r)
+		runeCount++
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+func (s *Server) broadcastSystemMessage(text string) {
+	event := SystemEvent{
+		Type:      "system",
+		Text:      text,
+		Timestamp: time.Now(),
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("Error marshaling system event: %v", err)
+		return
+	}
+	s.broadcast <- data
 }
 
 // NewServer creates a new server instance
@@ -191,41 +235,49 @@ func (s *Server) saveMessageToFile(msg Message) {
 
 // Run starts the server's main loop
 func (s *Server) Run() {
-    for {
-        select {
-        case client := <-s.register:
-            s.mu.Lock()
-            s.clients[client] = true
-            s.mu.Unlock()
-            
-            log.Printf("Client %s connected", client.id)
-            
-            // Send historical messages
-            s.sendHistoricalMessages(client)
-            
-        case client := <-s.unregister:
-            s.mu.Lock()
-            if _, ok := s.clients[client]; ok {
-                delete(s.clients, client)
-                close(client.send)
-                client.cancel()
-                log.Printf("Client %s disconnected", client.id)
-            }
-            s.mu.Unlock()
-            
-        case message := <-s.broadcast:
-            s.mu.RLock()
-            for client := range s.clients {
-                select {
-                case client.send <- message:
-                default:
-                    close(client.send)
-                    delete(s.clients, client)
-                }
-            }
-            s.mu.RUnlock()
-        }
-    }
+	for {
+		select {
+		case client := <-s.register:
+			s.mu.Lock()
+			s.clients[client] = true
+			s.mu.Unlock()
+
+			log.Printf("Client %s (%s) connected", client.id, client.name)
+
+			// Send historical chat messages only.
+			s.sendHistoricalMessages(client)
+			// Presence event is ephemeral: broadcast to online clients only.
+			s.broadcastSystemMessage(fmt.Sprintf("%s joined", client.name))
+
+		case client := <-s.unregister:
+			shouldBroadcastLeave := false
+			s.mu.Lock()
+			if _, ok := s.clients[client]; ok {
+				delete(s.clients, client)
+				close(client.send)
+				client.cancel()
+				log.Printf("Client %s (%s) disconnected", client.id, client.name)
+				shouldBroadcastLeave = true
+			}
+			s.mu.Unlock()
+			if shouldBroadcastLeave {
+				// Presence event is ephemeral: not persisted/replayed.
+				s.broadcastSystemMessage(fmt.Sprintf("%s left", client.name))
+			}
+
+		case message := <-s.broadcast:
+			s.mu.RLock()
+			for client := range s.clients {
+				select {
+				case client.send <- message:
+				default:
+					close(client.send)
+					delete(s.clients, client)
+				}
+			}
+			s.mu.RUnlock()
+		}
+	}
 }
 
 // sendHistoricalMessages sends stored messages to a new client based on ignore parameter
@@ -262,28 +314,34 @@ func (s *Server) sendHistoricalMessages(client *Client) {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-    conn, err := upgrader.Upgrade(w, r, nil)
-    if err != nil {
-        log.Printf("Failed to upgrade connection: %v", err)
-        return
-    }
-    
-    // Create client with context for cancellation
-    ctx, cancel := context.WithCancel(context.Background())
-    client := &Client{
-        conn:   conn,
-        send:   make(chan []byte, 256),
-        id:     getClientIP(r, conn.RemoteAddr().String()),
-        ctx:    ctx,
-        cancel: cancel,
-    }
-    
-    // Register client
-    s.register <- client
-    
-    // Start goroutines for reading and writing
-    go s.readPump(client)
-    go s.writePump(client)
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Failed to upgrade connection: %v", err)
+		return
+	}
+
+	// Create client with context for cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	clientID := getClientIP(r, conn.RemoteAddr().String())
+	name := sanitizeUsername(r.URL.Query().Get("username"))
+	if name == "" {
+		name = clientID
+	}
+	client := &Client{
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		id:     clientID,
+		name:   name,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	// Register client
+	s.register <- client
+
+	// Start goroutines for reading and writing
+	go s.readPump(client)
+	go s.writePump(client)
 }
 
 // readPump handles incoming messages from client

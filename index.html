@@ -14,6 +14,7 @@
         #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
         .sent { color: blue; }
         .received { color: green; }
+        .system { color: #000; font-style: italic; }
         input { padding: 5px; width: 100%; box-sizing: border-box; }
         button { padding: 5px 10px; }
         .inputRow { display: flex; gap: 8px; align-items: center; }
@@ -226,7 +227,8 @@ async function hashString(message) {
 function getWebSocketURL(){
   const loc = window.location;
   const scheme = (loc.protocol === 'https:') ? 'wss:' : 'ws:';
-  return `${scheme}//${loc.host}/ws`;
+  const userParam = encodeURIComponent(username || '');
+  return `${scheme}//${loc.host}/ws?username=${userParam}`;
 }
 function connect() {
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -245,6 +247,10 @@ function connect() {
   socket.addEventListener('message', async function (event) {
     let data=JSON.parse(event.data);
     console.log(data);
+    if(data && data.type === 'system'){
+      addMessage(formatTimestamp(data.timestamp)+': '+(data.text || ''), 'system');
+      return;
+    }
     let decrypted=await decryptMessage(key,data.content);
     let sender='Unknown';
     let messageText=decrypted;
