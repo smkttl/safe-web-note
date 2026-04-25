@@ -11,6 +11,13 @@
             width: 90%;
             margin: 0 auto;
         }
+        #onlineUsersBar {
+            border: 1px solid #ccc;
+            background: #f6f6f6;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            min-height: 1.2em;
+        }
         #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
         .sent { color: blue; }
         .received { color: green; }
@@ -72,6 +79,7 @@
 <body>
     <div class="container">
         <h2>Chatter</h2>
+        <div id="onlineUsersBar">Online users: (none)</div>
         <div id="messages"></div>
         <div class="inputRow">
             <input type="text" id="messageInput" placeholder="Type your message...">
@@ -106,6 +114,7 @@ const input=document.getElementById('messageInput');
 const sendButton=document.getElementById('sendButton');
 const usernameInput=document.getElementById('username');
 const passwordInput=document.getElementById('password');
+const onlineUsersBar=document.getElementById('onlineUsersBar');
 function showPopup(message){
   const panel = document.getElementById('popupPanel');
   const backdrop = document.getElementById('popupBackdrop');
@@ -172,7 +181,16 @@ function updateStatus(status){
   setSendEnabled(status === 'Connected');
   lastConnState = status.toLowerCase();
 }
+function updateOnlineUsers(users){
+  if(!onlineUsersBar){return;}
+  if(!Array.isArray(users) || users.length === 0){
+    onlineUsersBar.textContent = 'Online users: (none)';
+    return;
+  }
+  onlineUsersBar.textContent = 'Online users: ' + users.join(', ');
+}
 updateStatus('Disconnected');
+updateOnlineUsers([]);
 const envOk = checkEnvironment();
 if(envOk){
   showPopup('Environment check passed.');
@@ -248,6 +266,9 @@ function connect() {
     let data=JSON.parse(event.data);
     console.log(data);
     if(data && data.type === 'system'){
+      if(Array.isArray(data.onlineUsers)){
+        updateOnlineUsers(data.onlineUsers);
+      }
       addMessage(formatTimestamp(data.timestamp)+': '+(data.text || ''), 'system');
       return;
     }
@@ -268,6 +289,7 @@ function connect() {
   });
   socket.addEventListener('close', function (event) {
     updateStatus('Disconnected');
+    updateOnlineUsers([]);
     if (lastConnState !== 'disconnected') {
       addMessage('Disconnected from server', 'system');
     }

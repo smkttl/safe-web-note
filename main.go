@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -54,9 +55,22 @@ var upgrader = websocket.Upgrader{
 }
 
 type SystemEvent struct {
-	Type      string    `json:"type"`
-	Text      string    `json:"text"`
-	Timestamp time.Time `json:"timestamp"`
+	Type        string    `json:"type"`
+	Text        string    `json:"text"`
+	Timestamp   time.Time `json:"timestamp"`
+	OnlineUsers []string  `json:"onlineUsers"`
+}
+
+func (s *Server) getOnlineUsersSnapshot() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	users := make([]string, 0, len(s.clients))
+	for client := range s.clients {
+		users = append(users, client.name)
+	}
+	sort.Strings(users)
+	return users
 }
 
 func normalizeIP(raw string) string {
@@ -137,9 +151,10 @@ func sanitizeUsername(raw string) string {
 
 func (s *Server) broadcastSystemMessage(text string) {
 	event := SystemEvent{
-		Type:      "system",
-		Text:      text,
-		Timestamp: time.Now(),
+		Type:        "system",
+		Text:        text,
+		Timestamp:   time.Now(),
+		OnlineUsers: s.getOnlineUsersSnapshot(),
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
