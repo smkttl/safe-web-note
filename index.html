@@ -19,6 +19,7 @@
             min-height: 1.2em;
         }
         #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+        #messages img { display: block; max-width: 100%; max-height: 240px; margin-top: 6px; }
         .sent { color: blue; }
         .received { color: green; }
         .system { color: #000; font-style: italic; }
@@ -285,7 +286,7 @@ function connect() {
       // fall back to raw decrypted text
     }
     const msgType = (sender === username) ? 'sent' : 'received';
-    addMessage(sender+': '+formatTimestamp(data.timestamp)+': '+messageText, msgType);
+    addChatMessage(sender, formatTimestamp(data.timestamp), messageText, msgType);
   });
   socket.addEventListener('close', function (event) {
     updateStatus('Disconnected');
@@ -316,6 +317,59 @@ function addMessage(text, type) {
   const messageElement = document.createElement('div');
   messageElement.className = type;
   messageElement.textContent = text;
+  messages.appendChild(messageElement);
+  messages.scrollTop = messages.scrollHeight;
+}
+function isSafeMarkdownUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl, window.location.href);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch (e) {
+    return false;
+  }
+}
+function appendMarkdownInline(parent, text) {
+  const markdownPattern = /(!?)\[([^\]\n]*)\]\(([^)\s]+)\)/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = markdownPattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+
+    const rawToken = match[0];
+    const isImage = match[1] === '!';
+    const label = match[2];
+    const url = match[3];
+    if (!isSafeMarkdownUrl(url)) {
+      parent.appendChild(document.createTextNode(rawToken));
+    } else if (isImage) {
+      const img = document.createElement('img');
+      img.alt = label || 'image';
+      img.src = url;
+      img.loading = 'lazy';
+      parent.appendChild(img);
+    } else {
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = label || url;
+      parent.appendChild(link);
+    }
+
+    lastIndex = markdownPattern.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+}
+function addChatMessage(sender, timestamp, messageText, type) {
+  const messages = document.getElementById('messages');
+  const messageElement = document.createElement('div');
+  messageElement.className = type;
+  messageElement.appendChild(document.createTextNode(sender + ': ' + timestamp + ': '));
+  appendMarkdownInline(messageElement, messageText);
   messages.appendChild(messageElement);
   messages.scrollTop = messages.scrollHeight;
 }
