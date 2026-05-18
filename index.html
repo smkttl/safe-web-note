@@ -23,7 +23,11 @@
         .sent { color: blue; }
         .received { color: green; }
         .system { color: #000; font-style: italic; }
-        .repeat { color: #9b59b6; font-weight: bold; }
+        .repeat {
+            color: #9b59b6;
+            font-weight: bold;
+            animation: repeatShine 1.4s ease-in-out infinite;
+        }
         input { padding: 5px; width: 100%; box-sizing: border-box; }
         button { padding: 5px 10px; }
         .inputRow { display: flex; gap: 8px; align-items: center; }
@@ -77,24 +81,17 @@
         #popupPanel button {
             margin-top: 12px;
         }
-        #repeatPopup {
-            position: fixed;
-            top: 16px;
-            right: 16px;
-            max-width: min(320px, calc(100vw - 32px));
-            background: #fff;
-            border: 1px solid #9b59b6;
-            color: #4a235a;
-            padding: 10px 12px;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.18);
-            z-index: 1300;
-            display: none;
-            overflow-wrap: anywhere;
-            animation: repeatPulse 1.4s ease-in-out infinite;
-        }
-        @keyframes repeatPulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.12; }
+        @keyframes repeatShine {
+            0%, 100% {
+                color: #9b59b6;
+                text-shadow: none;
+                opacity: 1;
+            }
+            50% {
+                color: #f1c40f;
+                text-shadow: 0 0 6px rgba(241,196,15,0.85);
+                opacity: 0.28;
+            }
         }
     </style>
 </head>
@@ -121,7 +118,6 @@
         <div id="popupMessage"></div>
         <button onclick="closePopup();">OK</button>
     </div>
-    <div id="repeatPopup"></div>
     <script>
 if (window.location.protocol === 'http:' &&
     window.location.hostname !== 'localhost' &&
@@ -140,7 +136,6 @@ const imageInput=document.getElementById('imageInput');
 const usernameInput=document.getElementById('username');
 const passwordInput=document.getElementById('password');
 const onlineUsersBar=document.getElementById('onlineUsersBar');
-const repeatPopup=document.getElementById('repeatPopup');
 const maxImageEdge = 512;
 const jpegQuality = 0.8;
 function showPopup(message){
@@ -373,9 +368,8 @@ function connect() {
       // fall back to raw decrypted text
     }
     const msgType = (sender === username) ? 'sent' : 'received';
-    const repeatText = parseRepeatCommand(messageText);
+    const repeatText = parseShineCommand(messageText);
     if(repeatText !== null){
-      showRepeatPopup(repeatText);
       addChatMessage(sender, formatTimestamp(data.timestamp), repeatText, 'repeat');
       return;
     }
@@ -426,18 +420,14 @@ function addMessage(text, type) {
   messages.appendChild(messageElement);
   messages.scrollTop = messages.scrollHeight;
 }
-function parseRepeatCommand(text) {
+function parseShineCommand(text) {
   if(typeof text !== 'string'){return null;}
-  const prefix = '{repeat}[';
+  const prefix = '{shine}[';
   if(!text.startsWith(prefix) || !text.endsWith(']')){
     return null;
   }
   const repeatText = text.slice(prefix.length, -1);
   return repeatText === '' ? null : repeatText;
-}
-function showRepeatPopup(text) {
-  repeatPopup.textContent = text;
-  repeatPopup.style.display = 'block';
 }
 function isSafeMarkdownUrl(rawUrl) {
   try {
