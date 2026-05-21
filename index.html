@@ -28,6 +28,16 @@
             font-weight: bold;
             animation: repeatShine 1.4s ease-in-out infinite;
         }
+        .flash {
+            --flash-color: #111;
+            display: inline-block;
+            padding: 0 3px;
+            color: var(--flash-color);
+            background: #fff;
+            animation: flashSwap 1s steps(1, end) infinite;
+        }
+        .sent.flash { --flash-color: blue; }
+        .received.flash { --flash-color: green; }
         input { padding: 5px; width: 100%; box-sizing: border-box; }
         button { padding: 5px 10px; }
         .inputRow { display: flex; gap: 8px; align-items: center; }
@@ -91,6 +101,16 @@
                 color: #f1c40f;
                 text-shadow: 0 0 6px rgba(241,196,15,0.85);
                 opacity: 0.28;
+            }
+        }
+        @keyframes flashSwap {
+            0%, 100% {
+                color: var(--flash-color);
+                background: #fff;
+            }
+            50% {
+                color: #fff;
+                background: var(--flash-color);
             }
         }
     </style>
@@ -368,9 +388,14 @@ function connect() {
       // fall back to raw decrypted text
     }
     const msgType = (sender === username) ? 'sent' : 'received';
-    const repeatText = parseShineCommand(messageText);
-    if(repeatText !== null){
-      addChatMessage(sender, formatTimestamp(data.timestamp), repeatText, 'repeat');
+    const shineText = parseWrappedCommand(messageText, 'shine');
+    if(shineText !== null){
+      addChatMessage(sender, formatTimestamp(data.timestamp), shineText, 'repeat');
+      return;
+    }
+    const flashText = parseWrappedCommand(messageText, 'flash');
+    if(flashText !== null){
+      addChatMessage(sender, formatTimestamp(data.timestamp), flashText, `${msgType} flash`);
       return;
     }
     addChatMessage(sender, formatTimestamp(data.timestamp), messageText, msgType);
@@ -420,14 +445,14 @@ function addMessage(text, type) {
   messages.appendChild(messageElement);
   messages.scrollTop = messages.scrollHeight;
 }
-function parseShineCommand(text) {
+function parseWrappedCommand(text, command) {
   if(typeof text !== 'string'){return null;}
-  const prefix = '{shine}[';
+  const prefix = `{${command}}[`;
   if(!text.startsWith(prefix) || !text.endsWith(']')){
     return null;
   }
-  const repeatText = text.slice(prefix.length, -1);
-  return repeatText === '' ? null : repeatText;
+  const commandText = text.slice(prefix.length, -1);
+  return commandText === '' ? null : commandText;
 }
 function isSafeMarkdownUrl(rawUrl) {
   try {
