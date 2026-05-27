@@ -208,7 +208,9 @@ func (s *Server) loadMessagesFromFile() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.messages = make([]Message, 0)
+	const historyLimit = 25
+
+	s.messages = make([]Message, 0, historyLimit)
 	s.msgCounter = 0
 
 	for scanner.Scan() {
@@ -222,7 +224,12 @@ func (s *Server) loadMessagesFromFile() error {
 			log.Printf("Warning: failed to parse message line: %v", err)
 			continue
 		}
-		s.messages = append(s.messages, msg)
+		if len(s.messages) == historyLimit {
+			copy(s.messages, s.messages[1:])
+			s.messages[len(s.messages)-1] = msg
+		} else {
+			s.messages = append(s.messages, msg)
+		}
 		s.msgCounter++
 	}
 
