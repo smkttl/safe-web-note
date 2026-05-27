@@ -274,15 +274,32 @@ async function encryptMessage(key, plaintext) {
   const encryptedData=new Uint8Array(iv.length+ciphertext.byteLength);
   encryptedData.set(iv,0);
   encryptedData.set(new Uint8Array(ciphertext),iv.length);
-  return btoa(String.fromCharCode.apply(null,encryptedData));
+  return bytesToBase64(encryptedData);
 }
 async function decryptMessage(key, encryptedBase64) {
-  const encryptedData = Uint8Array.from(atob(encryptedBase64),c=>c.charCodeAt(0));
+  const encryptedData = base64ToBytes(encryptedBase64);
   const iv=encryptedData.slice(0, 12);
   const ciphertext=encryptedData.slice(12);
   const decryptedData = await crypto.subtle.decrypt({name:'AES-GCM',iv:iv,tagLength:128},key,ciphertext);
   const decoder = new TextDecoder();
   return decoder.decode(decryptedData);
+}
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for(let i = 0; i < bytes.length; i += chunkSize){
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for(let i = 0; i < binary.length; i++){
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
@@ -432,7 +449,8 @@ async function sendMessage() {
     input.value='';
     imageInput.value='';
   } catch(e) {
-    showPopup(e && e.message ? e.message : 'Failed to send message.');
+    console.error('Failed to send message:', e);
+    showPopup(e && e.message ? `Failed to send message: ${e.message}` : 'Failed to send message.');
   } finally {
     setSendEnabled(socket && socket.readyState === WebSocket.OPEN);
   }

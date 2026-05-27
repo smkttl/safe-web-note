@@ -367,6 +367,8 @@ func (s *Server) readPump(client *Client) {
 		client.conn.Close()
 	}()
 
+	client.conn.SetReadLimit(4 * 1024 * 1024)
+
 	for {
 		select {
 		case <-client.ctx.Done():
