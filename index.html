@@ -39,7 +39,9 @@
         .sent.flash { --flash-color: blue; }
         .received.flash { --flash-color: green; }
         .runaroundClone {
-            position: absolute;
+            position: fixed;
+            left: 0;
+            top: 0;
             z-index: 20;
             pointer-events: none;
             white-space: nowrap;
@@ -503,7 +505,7 @@ function startRunaroundClone(text, type) {
   const clone = document.createElement('div');
   clone.className = `runaroundClone ${type}`;
   appendMarkdownInline(clone, text);
-  messages.appendChild(clone);
+  document.body.appendChild(clone);
 
   const speed = 320;
   let x = Math.random() * Math.max(1, messages.clientWidth - clone.offsetWidth);
@@ -517,8 +519,9 @@ function startRunaroundClone(text, type) {
     const dt = Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
 
-    const maxX = Math.max(0, messages.clientWidth - clone.offsetWidth);
-    const maxY = Math.max(0, messages.clientHeight - clone.offsetHeight);
+    const rect = messages.getBoundingClientRect();
+    const maxX = Math.max(0, rect.width - clone.offsetWidth);
+    const maxY = Math.max(0, rect.height - clone.offsetHeight);
     x += vx * dt;
     y += vy * dt;
 
@@ -531,7 +534,7 @@ function startRunaroundClone(text, type) {
       vy *= -1;
     }
 
-    clone.style.transform = `translate(${x}px, ${messages.scrollTop + y}px)`;
+    clone.style.transform = `translate(${rect.left + x}px, ${rect.top + y}px)`;
     requestAnimationFrame(tick);
   }
 
