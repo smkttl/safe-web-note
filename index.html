@@ -18,7 +18,7 @@
             margin-bottom: 10px;
             min-height: 1.2em;
         }
-        #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+        #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; position: relative; }
         #messages img { display: block; max-width: 100%; max-height: 240px; margin-top: 6px; }
         .sent { color: blue; }
         .received { color: green; }
@@ -38,6 +38,20 @@
         }
         .sent.flash { --flash-color: blue; }
         .received.flash { --flash-color: green; }
+        .runaroundClone {
+            position: absolute;
+            z-index: 20;
+            pointer-events: none;
+            white-space: nowrap;
+            max-width: 85%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-weight: bold;
+            background: rgba(255,255,255,0.86);
+            border: 1px solid currentColor;
+            padding: 2px 5px;
+            will-change: transform;
+        }
         input { padding: 5px; width: 100%; box-sizing: border-box; }
         button { padding: 5px 10px; }
         .inputRow { display: flex; gap: 8px; align-items: center; }
@@ -415,6 +429,12 @@ function connect() {
       addChatMessage(sender, formatTimestamp(data.timestamp), flashText, `${msgType} flash`);
       return;
     }
+    const runaroundText = parseWrappedCommand(messageText, 'runaround');
+    if(runaroundText !== null){
+      addChatMessage(sender, formatTimestamp(data.timestamp), runaroundText, msgType);
+      startRunaroundClone(runaroundText, msgType);
+      return;
+    }
     addChatMessage(sender, formatTimestamp(data.timestamp), messageText, msgType);
   });
   socket.addEventListener('close', function (event) {
@@ -470,7 +490,52 @@ function parseWrappedCommand(text, command) {
     return null;
   }
   const commandText = text.slice(prefix.length, -1);
-  return commandText === '' ? null : commandText;
+  if(commandText === '' || containsMarkdownImage(commandText)){
+    return null;
+  }
+  return commandText;
+}
+function containsMarkdownImage(text) {
+  return /!\[[^\]\n]*\]\([^)\s]+\)/.test(text);
+}
+function startRunaroundClone(text, type) {
+  const messages = document.getElementById('messages');
+  const clone = document.createElement('div');
+  clone.className = `runaroundClone ${type}`;
+  appendMarkdownInline(clone, text);
+  messages.appendChild(clone);
+
+  const speed = 320;
+  let x = Math.random() * Math.max(1, messages.clientWidth - clone.offsetWidth);
+  let y = Math.random() * Math.max(1, messages.clientHeight - clone.offsetHeight);
+  let vx = speed * (Math.random() < 0.5 ? -1 : 1);
+  let vy = speed * 0.82 * (Math.random() < 0.5 ? -1 : 1);
+  let lastTime = performance.now();
+
+  function tick(now) {
+    if(!clone.isConnected){return;}
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+
+    const maxX = Math.max(0, messages.clientWidth - clone.offsetWidth);
+    const maxY = Math.max(0, messages.clientHeight - clone.offsetHeight);
+    x += vx * dt;
+    y += vy * dt;
+
+    if(x <= 0 || x >= maxX){
+      x = Math.max(0, Math.min(maxX, x));
+      vx *= -1;
+    }
+    if(y <= 0 || y >= maxY){
+      y = Math.max(0, Math.min(maxY, y));
+      vy *= -1;
+    }
+
+    clone.style.transform = `translate(${x}px, ${messages.scrollTop + y}px)`;
+    requestAnimationFrame(tick);
+  }
+
+  requestAnimationFrame(tick);
 }
 function isSafeMarkdownUrl(rawUrl) {
   try {
