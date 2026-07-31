@@ -519,16 +519,57 @@ function parseRunaroundCommand(text) {
 function containsMarkdownImage(text) {
   return /!\[[^\]\n]*\]\([^)\s]+\)/.test(text);
 }
+let runaroundObstacleCache = [];
+let runaroundObstacleFrame = null;
+function getRunaroundObstacles(frameTime) {
+  if(frameTime !== undefined && frameTime === runaroundObstacleFrame){
+    return runaroundObstacleCache;
+  }
+  const margin = 4;
+  runaroundObstacleCache = Array.from(
+    document.querySelectorAll('#onlineUsersBar, #messages, input, button'))
+    .filter(element => element.getClientRects().length > 0)
+    .map(element => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left - margin,
+        top: rect.top - margin,
+        right: rect.right + margin,
+        bottom: rect.bottom + margin
+      };
+    });
+  runaroundObstacleFrame = frameTime;
+  return runaroundObstacleCache;
+}
+function overlapsRunaroundObstacle(x, y, width, height, obstacle) {
+  return x < obstacle.right && x + width > obstacle.left &&
+    y < obstacle.bottom && y + height > obstacle.top;
+}
+function findRunaroundPosition(width, height, obstacles) {
+  const maxX = Math.max(0, window.innerWidth - width);
+  const maxY = Math.max(0, window.innerHeight - height);
+  for(let attempt = 0; attempt < 100; attempt++){
+    const x = Math.random() * maxX;
+    const y = Math.random() * maxY;
+    if(!obstacles.some(obstacle =>
+      overlapsRunaroundObstacle(x, y, width, height, obstacle))){
+      return {x, y};
+    }
+  }
+  return {x: 0, y: 0};
+}
 function startRunaroundClone(text, type) {
-  const messages = document.getElementById('messages');
   const clone = document.createElement('div');
   clone.className = `runaroundClone ${type}`;
   appendMarkdownInline(clone, text);
   document.body.appendChild(clone);
 
   const speed = 320;
-  let x = Math.random() * Math.max(1, messages.clientWidth - clone.offsetWidth);
-  let y = Math.random() * Math.max(1, messages.clientHeight - clone.offsetHeight);
+  let obstacles = getRunaroundObstacles();
+  const initialPosition = findRunaroundPosition(
+    clone.offsetWidth, clone.offsetHeight, obstacles);
+  let x = initialPosition.x;
+  let y = initialPosition.y;
   let vx = speed * (Math.random() < 0.5 ? -1 : 1);
   let vy = speed * 0.82 * (Math.random() < 0.5 ? -1 : 1);
   let lastTime = performance.now();
@@ -538,22 +579,58 @@ function startRunaroundClone(text, type) {
     const dt = Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
 
-    const rect = messages.getBoundingClientRect();
-    const maxX = Math.max(0, rect.width - clone.offsetWidth);
-    const maxY = Math.max(0, rect.height - clone.offsetHeight);
-    x += vx * dt;
-    y += vy * dt;
+    obstacles = getRunaroundObstacles(now);
+    if(obstacles.some(obstacle => overlapsRunaroundObstacle(
+      x, y, clone.offsetWidth, clone.offsetHeight, obstacle))){
+      const position = findRunaroundPosition(
+        clone.offsetWidth, clone.offsetHeight, obstacles);
+      x = position.x;
+      y = position.y;
+    }
 
+    const maxX = Math.max(0, window.innerWidth - clone.offsetWidth);
+    const maxY = Math.max(0, window.innerHeight - clone.offsetHeight);
+    x += vx * dt;
     if(x <= 0 || x >= maxX){
       x = Math.max(0, Math.min(maxX, x));
       vx *= -1;
     }
+    for(const obstacle of obstacles){
+      if(!overlapsRunaroundObstacle(
+        x, y, clone.offsetWidth, clone.offsetHeight, obstacle)){
+        continue;
+      }
+      x = vx > 0 ? obstacle.left - clone.offsetWidth : obstacle.right;
+      x = Math.max(0, Math.min(maxX, x));
+      vx *= -1;
+      break;
+    }
+
+    y += vy * dt;
     if(y <= 0 || y >= maxY){
       y = Math.max(0, Math.min(maxY, y));
       vy *= -1;
     }
+    for(const obstacle of obstacles){
+      if(!overlapsRunaroundObstacle(
+        x, y, clone.offsetWidth, clone.offsetHeight, obstacle)){
+        continue;
+      }
+      y = vy > 0 ? obstacle.top - clone.offsetHeight : obstacle.bottom;
+      y = Math.max(0, Math.min(maxY, y));
+      vy *= -1;
+      break;
+    }
 
-    clone.style.transform = `translate(${rect.left + x}px, ${rect.top + y}px)`;
+    if(obstacles.some(obstacle => overlapsRunaroundObstacle(
+      x, y, clone.offsetWidth, clone.offsetHeight, obstacle))){
+      const position = findRunaroundPosition(
+        clone.offsetWidth, clone.offsetHeight, obstacles);
+      x = position.x;
+      y = position.y;
+    }
+
+    clone.style.transform = `translate(${x}px, ${y}px)`;
     requestAnimationFrame(tick);
   }
 
