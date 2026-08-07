@@ -26,12 +26,13 @@ type Message struct {
 
 // Client represents a WebSocket client
 type Client struct {
-	conn   *websocket.Conn
-	send   chan []byte
-	id     string
-	name   string
-	ctx    context.Context
-	cancel context.CancelFunc
+	conn     *websocket.Conn
+	send     chan []byte
+	id       string
+	name     string
+	readOnly bool
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // Server manages WebSocket clients and message persistence
@@ -335,8 +336,17 @@ func (s *Server) sendHistoricalMessages(client *Client) {
 	}
 }
 
-// handleWebSocket handles WebSocket connections
+// handleWebSocket handles read-write WebSocket connections.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.handleWebSocketMode(w, r, false)
+}
+
+// handleReadOnlyWebSocket handles WebSocket connections that cannot publish.
+func (s *Server) handleReadOnlyWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.handleWebSocketMode(w, r, true)
+}
+
+func (s *Server) handleWebSocketMode(w http.ResponseWriter, r *http.Request, readOnly bool) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)
@@ -351,12 +361,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		name = clientID
 	}
 	client := &Client{
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		id:     clientID,
-		name:   name,
-		ctx:    ctx,
-		cancel: cancel,
+		conn:     conn,
+		send:     make(chan []byte, 256),
+		id:       clientID,
+		name:     name,
+		readOnly: readOnly,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 
 	// Register client
@@ -386,6 +397,16 @@ func (s *Server) readPump(client *Client) {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					log.Printf("WebSocket read error for client %s: %v", client.id, err)
 				}
+				return
+			}
+			if client.readOnly {
+				deadline := time.Now().Add(time.Second)
+				client.conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(
+						websocket.ClosePolicyViolation, "read-only connection"),
+					deadline,
+				)
 				return
 			}
 
@@ -492,6 +513,7 @@ func main() {
 		http.ServeFile(w, r, "index.html")
 	})
 	http.HandleFunc("/ws", server.handleWebSocket)
+	http.HandleFunc("/ws-readonly", server.handleReadOnlyWebSocket)
 
 	// Add a simple status endpoint
 	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
@@ -512,6 +534,7 @@ func main() {
 	addr := ":8080"
 	log.Printf("Server starting on %s", addr)
 	log.Printf("WebSocket endpoint: ws://%s/ws", addr)
+	log.Printf("Read-only WebSocket endpoint: ws://%s/ws-readonly", addr)
 	log.Printf("Status endpoint: http://%s/status", addr)
 
 	if err := http.ListenAndServe(addr, nil); err != nil {

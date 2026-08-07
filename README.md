@@ -77,6 +77,24 @@ sudo bash uninstall-service.sh
 - The server writes each encrypted message as one JSON line in `messages.txt`.
 - On new connections, the server sends the most recent 25 messages.
 
+## Read-Only WebSocket
+
+An unlinked read-only connection is available at:
+
+```text
+ws://localhost:8080/ws-readonly?username=viewer
+```
+
+Use `wss://` when the site is served over HTTPS. The endpoint receives the same
+encrypted history, live messages, and system events as `/ws`. It does not decrypt
+content, so the client still needs the shared password and the same client-side
+decryption logic.
+
+The server closes a read-only connection with WebSocket policy-violation code
+`1008` if it sends a data message. The endpoint is intentionally not linked or
+shown in the web UI. Its unlinked URL is not an authentication mechanism; message
+confidentiality still depends on the shared encryption password.
+
 ## Files
 - `main.go`: WebSocket server, persistence, history replay
 - `index.html`: UI + client-side crypto + WebSocket client
