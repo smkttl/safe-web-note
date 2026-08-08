@@ -74,21 +74,24 @@ sudo bash uninstall-service.sh
 
 ## How It Works
 - The browser derives a key from the password (PBKDF2) and encrypts each message using AES-GCM.
-- The server writes each encrypted message as one JSON line in `messages.txt`.
-- On new connections, the server sends the most recent 25 messages.
+- The server writes encrypted messages to `messages.txt` through one ordered writer and flushes the queue during normal shutdown.
+- The server retains only the most recent 25 messages in memory and sends them to new connections.
 
 ## Read-Only WebSocket
 
 An unlinked read-only connection is available at:
 
 ```text
-ws://localhost:8080/ws-readonly?username=viewer
+ws://localhost:8080/ws-readonly
 ```
 
 Use `wss://` when the site is served over HTTPS. The endpoint receives the same
 encrypted history, live messages, and system events as `/ws`. It does not decrypt
 content, so the client still needs the shared password and the same client-side
 decryption logic.
+
+Read-only clients are incognito: the endpoint ignores any `username` parameter,
+does not appear in online-user lists, and emits no join or leave events.
 
 The server closes a read-only connection with WebSocket policy-violation code
 `1008` if it sends a data message. The endpoint is intentionally not linked or

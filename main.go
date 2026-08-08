@@ -4,17 +4,25 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	historyLimit     = 25
+	messageQueueSize = 256
 )
 
 // Message represents a chat message
@@ -40,13 +48,26 @@ type Server struct {
 	clients    map[*Client]bool
 	register   chan *Client
 	unregister chan *Client
-	broadcast  chan []byte
+	incoming   chan Message
+	persist    chan Message
 	messages   []Message
 	mu         sync.RWMutex
 	file       *os.File
-	fileMutex  sync.Mutex
 	msgCounter int
 	checkToken string
+
+	clientWG    sync.WaitGroup
+	handlerWG   sync.WaitGroup
+	startOnce   sync.Once
+	closeOnce   sync.Once
+	runDone     chan struct{}
+	persistDone chan struct{}
+	lifecycleMu sync.Mutex
+	started     bool
+	closing     bool
+	closeErr    error
+	persistErr  error
+	persistMu   sync.Mutex
 }
 
 var upgrader = websocket.Upgrader{
@@ -68,6 +89,9 @@ func (s *Server) getOnlineUsersSnapshot() []string {
 
 	users := make([]string, 0, len(s.clients))
 	for client := range s.clients {
+		if client.readOnly || client.name == "" {
+			continue
+		}
 		users = append(users, client.name)
 	}
 	sort.Strings(users)
@@ -162,7 +186,7 @@ func (s *Server) broadcastSystemMessage(text string) {
 		log.Printf("Error marshaling system event: %v", err)
 		return
 	}
-	s.broadcast <- data
+	s.broadcastToClients(data)
 }
 
 // NewServer creates a new server instance
@@ -173,17 +197,21 @@ func NewServer(filename string, checkFile string) (*Server, error) {
 	}
 	checkToken, err := os.ReadFile(checkFile)
 	if err != nil {
+		file.Close()
 		return nil, fmt.Errorf("failed to read check file: %v", err)
 	}
 
 	server := &Server{
-		clients:    make(map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan []byte, 256),
-		messages:   make([]Message, 0),
-		file:       file,
-		checkToken: string(checkToken),
+		clients:     make(map[*Client]bool),
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		incoming:    make(chan Message, messageQueueSize),
+		persist:     make(chan Message, messageQueueSize),
+		messages:    make([]Message, 0),
+		file:        file,
+		checkToken:  string(checkToken),
+		runDone:     make(chan struct{}),
+		persistDone: make(chan struct{}),
 	}
 
 	// Load existing messages from file
@@ -196,9 +224,6 @@ func NewServer(filename string, checkFile string) (*Server, error) {
 
 // loadMessagesFromFile loads existing messages from the file
 func (s *Server) loadMessagesFromFile() error {
-	s.fileMutex.Lock()
-	defer s.fileMutex.Unlock()
-
 	// Seek to beginning of file
 	if _, err := s.file.Seek(0, 0); err != nil {
 		return err
@@ -208,8 +233,6 @@ func (s *Server) loadMessagesFromFile() error {
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	const historyLimit = 25
 
 	s.messages = make([]Message, 0, historyLimit)
 	s.msgCounter = 0
@@ -237,28 +260,52 @@ func (s *Server) loadMessagesFromFile() error {
 	return scanner.Err()
 }
 
-// saveMessageToFile saves a message to the file asynchronously
-func (s *Server) saveMessageToFile(msg Message) {
-	go func() {
-		s.fileMutex.Lock()
-		defer s.fileMutex.Unlock()
+func (s *Server) recordPersistenceError(err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("Persistence error: %v", err)
+	s.persistMu.Lock()
+	if s.persistErr == nil {
+		s.persistErr = err
+	}
+	s.persistMu.Unlock()
+}
 
+func (s *Server) persistenceLoop() {
+	defer close(s.persistDone)
+	for msg := range s.persist {
 		data, err := json.Marshal(msg)
 		if err != nil {
-			log.Printf("Error marshaling message: %v", err)
+			s.recordPersistenceError(fmt.Errorf("marshal message: %w", err))
+			continue
+		}
+		if _, err := s.file.Write(append(data, '\n')); err != nil {
+			s.recordPersistenceError(fmt.Errorf("write message: %w", err))
+			continue
+		}
+		if err := s.file.Sync(); err != nil {
+			s.recordPersistenceError(fmt.Errorf("sync message file: %w", err))
+		}
+	}
+}
+
+func (s *Server) Start() {
+	s.startOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		defer s.lifecycleMu.Unlock()
+		if s.closing {
 			return
 		}
-
-		if _, err := s.file.Write(append(data, '\n')); err != nil {
-			log.Printf("Error writing to file: %v", err)
-		}
-
-		s.file.Sync() // Ensure data is written to disk
-	}()
+		s.started = true
+		go s.persistenceLoop()
+		go s.Run()
+	})
 }
 
 // Run starts the server's main loop
 func (s *Server) Run() {
+	defer close(s.runDone)
 	for {
 		select {
 		case client := <-s.register:
@@ -266,12 +313,18 @@ func (s *Server) Run() {
 			s.clients[client] = true
 			s.mu.Unlock()
 
-			log.Printf("Client %s (%s) connected", client.id, client.name)
+			if client.readOnly {
+				log.Printf("Read-only client %s connected", client.id)
+			} else {
+				log.Printf("Client %s (%s) connected", client.id, client.name)
+			}
 
 			// Send historical chat messages only.
 			s.sendHistoricalMessages(client)
-			// Presence event is ephemeral: broadcast to online clients only.
-			s.broadcastSystemMessage(fmt.Sprintf("%s joined", client.name))
+			if !client.readOnly {
+				// Presence events are ephemeral: broadcast to online clients only.
+				s.broadcastSystemMessage(fmt.Sprintf("%s joined", client.name))
+			}
 
 		case client := <-s.unregister:
 			shouldBroadcastLeave := false
@@ -280,8 +333,12 @@ func (s *Server) Run() {
 				delete(s.clients, client)
 				close(client.send)
 				client.cancel()
-				log.Printf("Client %s (%s) disconnected", client.id, client.name)
-				shouldBroadcastLeave = true
+				if client.readOnly {
+					log.Printf("Read-only client %s disconnected", client.id)
+				} else {
+					log.Printf("Client %s (%s) disconnected", client.id, client.name)
+					shouldBroadcastLeave = true
+				}
 			}
 			s.mu.Unlock()
 			if shouldBroadcastLeave {
@@ -289,19 +346,50 @@ func (s *Server) Run() {
 				s.broadcastSystemMessage(fmt.Sprintf("%s left", client.name))
 			}
 
-		case message := <-s.broadcast:
-			s.mu.RLock()
-			for client := range s.clients {
-				select {
-				case client.send <- message:
-				default:
-					close(client.send)
-					delete(s.clients, client)
-				}
+		case message, ok := <-s.incoming:
+			if !ok {
+				return
 			}
-			s.mu.RUnlock()
+			s.acceptMessage(message)
 		}
 	}
+}
+
+func (s *Server) broadcastToClients(message []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for client := range s.clients {
+		select {
+		case client.send <- message:
+		default:
+			close(client.send)
+			delete(s.clients, client)
+			client.cancel()
+			client.conn.Close()
+		}
+	}
+}
+
+func (s *Server) acceptMessage(msg Message) {
+	s.mu.Lock()
+	if len(s.messages) == historyLimit {
+		copy(s.messages, s.messages[1:])
+		s.messages[len(s.messages)-1] = msg
+	} else {
+		s.messages = append(s.messages, msg)
+	}
+	s.msgCounter++
+	s.mu.Unlock()
+
+	// Queue persistence before broadcast so shutdown can flush every accepted message.
+	s.persist <- msg
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Error marshaling message: %v", err)
+		return
+	}
+	s.broadcastToClients(data)
 }
 
 // sendHistoricalMessages sends stored messages to a new client based on ignore parameter
@@ -346,7 +434,23 @@ func (s *Server) handleReadOnlyWebSocket(w http.ResponseWriter, r *http.Request)
 	s.handleWebSocketMode(w, r, true)
 }
 
+func (s *Server) beginWebSocketHandler() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.handlerWG.Add(1)
+	return true
+}
+
 func (s *Server) handleWebSocketMode(w http.ResponseWriter, r *http.Request, readOnly bool) {
+	if !s.beginWebSocketHandler() {
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.handlerWG.Done()
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)
@@ -356,9 +460,12 @@ func (s *Server) handleWebSocketMode(w http.ResponseWriter, r *http.Request, rea
 	// Create client with context for cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	clientID := getClientIP(r, conn.RemoteAddr().String())
-	name := sanitizeUsername(r.URL.Query().Get("username"))
-	if name == "" {
-		name = clientID
+	name := ""
+	if !readOnly {
+		name = sanitizeUsername(r.URL.Query().Get("username"))
+		if name == "" {
+			name = clientID
+		}
 	}
 	client := &Client{
 		conn:     conn,
@@ -374,8 +481,15 @@ func (s *Server) handleWebSocketMode(w http.ResponseWriter, r *http.Request, rea
 	s.register <- client
 
 	// Start goroutines for reading and writing
-	go s.readPump(client)
-	go s.writePump(client)
+	s.clientWG.Add(2)
+	go func() {
+		defer s.clientWG.Done()
+		s.readPump(client)
+	}()
+	go func() {
+		defer s.clientWG.Done()
+		s.writePump(client)
+	}()
 }
 
 // readPump handles incoming messages from client
@@ -410,31 +524,17 @@ func (s *Server) readPump(client *Client) {
 				return
 			}
 
-			// Create message object
+			// Submit the message to the server loop for ordered acceptance.
 			msg := Message{
 				Content:   string(message),
 				Timestamp: time.Now(),
 				SenderID:  client.id,
 			}
-
-			// Store in memory
-			s.mu.Lock()
-			s.messages = append(s.messages, msg)
-			s.msgCounter++
-			s.mu.Unlock()
-
-			// Save to file asynchronously
-			s.saveMessageToFile(msg)
-
-			// Marshal for broadcasting
-			data, err := json.Marshal(msg)
-			if err != nil {
-				log.Printf("Error marshaling message: %v", err)
-				continue
+			select {
+			case s.incoming <- msg:
+			case <-client.ctx.Done():
+				return
 			}
-
-			// Broadcast to all clients
-			s.broadcast <- data
 		}
 	}
 }
@@ -476,21 +576,45 @@ func (s *Server) writePump(client *Client) {
 
 // Close properly shuts down the server
 func (s *Server) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.closeOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		s.closing = true
+		started := s.started
+		s.lifecycleMu.Unlock()
 
-	// Close all client connections
-	for client := range s.clients {
-		client.cancel()
-		client.conn.Close()
-	}
+		if started {
+			s.handlerWG.Wait()
 
-	// Close file
-	if err := s.file.Close(); err != nil {
-		return fmt.Errorf("error closing file: %v", err)
-	}
+			s.mu.RLock()
+			clients := make([]*Client, 0, len(s.clients))
+			for client := range s.clients {
+				clients = append(clients, client)
+			}
+			s.mu.RUnlock()
+			for _, client := range clients {
+				client.cancel()
+				client.conn.Close()
+			}
 
-	return nil
+			s.clientWG.Wait()
+			close(s.incoming)
+			<-s.runDone
+			close(s.persist)
+			<-s.persistDone
+		}
+
+		s.persistMu.Lock()
+		persistenceErr := s.persistErr
+		s.persistMu.Unlock()
+		if err := s.file.Sync(); err != nil {
+			persistenceErr = errors.Join(persistenceErr, fmt.Errorf("sync message file: %w", err))
+		}
+		if err := s.file.Close(); err != nil {
+			persistenceErr = errors.Join(persistenceErr, fmt.Errorf("close message file: %w", err))
+		}
+		s.closeErr = persistenceErr
+	})
+	return s.closeErr
 }
 
 func main() {
@@ -499,24 +623,22 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to create server:", err)
 	}
-	defer server.Close()
-
-	// Start server goroutine
-	go server.Run()
+	server.Start()
 
 	// Set up HTTP routes
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
 		http.ServeFile(w, r, "index.html")
 	})
-	http.HandleFunc("/ws", server.handleWebSocket)
-	http.HandleFunc("/ws-readonly", server.handleReadOnlyWebSocket)
+	mux.HandleFunc("/ws", server.handleWebSocket)
+	mux.HandleFunc("/ws-readonly", server.handleReadOnlyWebSocket)
 
 	// Add a simple status endpoint
-	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		server.mu.RLock()
 		defer server.mu.RUnlock()
 
@@ -525,7 +647,7 @@ func main() {
 		w.Write([]byte(status))
 	})
 
-	http.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte(server.checkToken))
 	})
@@ -537,7 +659,36 @@ func main() {
 	log.Printf("Read-only WebSocket endpoint: ws://%s/ws-readonly", addr)
 	log.Printf("Status endpoint: http://%s/status", addr)
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatal("ListenAndServe:", err)
+	httpServer := &http.Server{Addr: addr, Handler: mux}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	signalContext, stopSignals := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	var runErr error
+	select {
+	case <-signalContext.Done():
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		runErr = httpServer.Shutdown(shutdownContext)
+		cancel()
+	case err := <-serveErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			runErr = err
+		}
+	}
+
+	closeErr := server.Close()
+	if runErr != nil {
+		log.Printf("HTTP server error: %v", runErr)
+	}
+	if closeErr != nil {
+		log.Printf("Server shutdown error: %v", closeErr)
+	}
+	if runErr != nil || closeErr != nil {
+		os.Exit(1)
 	}
 }
