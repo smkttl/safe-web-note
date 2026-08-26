@@ -34,13 +34,14 @@ type Message struct {
 
 // Client represents a WebSocket client
 type Client struct {
-	conn     *websocket.Conn
-	send     chan []byte
-	id       string
-	name     string
-	readOnly bool
-	ctx      context.Context
-	cancel   context.CancelFunc
+	conn      *websocket.Conn
+	send      chan []byte
+	id        string
+	name      string
+	userAgent string
+	readOnly  bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // Server manages WebSocket clients and message persistence
@@ -172,6 +173,38 @@ func sanitizeUsername(raw string) string {
 	}
 
 	return strings.TrimSpace(b.String())
+}
+
+func sanitizeUserAgent(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	runeCount := 0
+	for _, r := range raw {
+		if runeCount >= 256 {
+			break
+		}
+		if r == '\n' || r == '\r' || r == '\t' {
+			r = ' '
+		}
+		if r < 32 || r == 127 {
+			continue
+		}
+		b.WriteRune(r)
+		runeCount++
+	}
+
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func formatPresenceMessage(name, action, userAgent string) string {
+	if userAgent == "" {
+		return fmt.Sprintf("%s %s", name, action)
+	}
+	return fmt.Sprintf("%s %s [%s]", name, action, userAgent)
 }
 
 func (s *Server) broadcastSystemMessage(text string) {
@@ -323,7 +356,8 @@ func (s *Server) Run() {
 			s.sendHistoricalMessages(client)
 			if !client.readOnly {
 				// Presence events are ephemeral: broadcast to online clients only.
-				s.broadcastSystemMessage(fmt.Sprintf("%s joined", client.name))
+				s.broadcastSystemMessage(formatPresenceMessage(
+					client.name, "joined", client.userAgent))
 			}
 
 		case client := <-s.unregister:
@@ -343,7 +377,8 @@ func (s *Server) Run() {
 			s.mu.Unlock()
 			if shouldBroadcastLeave {
 				// Presence event is ephemeral: not persisted/replayed.
-				s.broadcastSystemMessage(fmt.Sprintf("%s left", client.name))
+				s.broadcastSystemMessage(formatPresenceMessage(
+					client.name, "left", client.userAgent))
 			}
 
 		case message, ok := <-s.incoming:
@@ -468,13 +503,14 @@ func (s *Server) handleWebSocketMode(w http.ResponseWriter, r *http.Request, rea
 		}
 	}
 	client := &Client{
-		conn:     conn,
-		send:     make(chan []byte, 256),
-		id:       clientID,
-		name:     name,
-		readOnly: readOnly,
-		ctx:      ctx,
-		cancel:   cancel,
+		conn:      conn,
+		send:      make(chan []byte, 256),
+		id:        clientID,
+		name:      name,
+		userAgent: sanitizeUserAgent(r.UserAgent()),
+		readOnly:  readOnly,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 
 	// Register client

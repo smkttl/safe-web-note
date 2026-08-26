@@ -89,6 +89,32 @@ func TestOnlineUsersExcludeReadOnlyClients(t *testing.T) {
 	}
 }
 
+func TestPresenceMessagesIncludeUserAgent(t *testing.T) {
+	joined := formatPresenceMessage("alice", "joined", "Mozilla/5.0")
+	if joined != "alice joined [Mozilla/5.0]" {
+		t.Fatalf("joined message is %q", joined)
+	}
+	left := formatPresenceMessage("bob", "left", "curl/8.0")
+	if left != "bob left [curl/8.0]" {
+		t.Fatalf("left message is %q", left)
+	}
+}
+
+func TestPresenceMessageOmitsMissingUserAgent(t *testing.T) {
+	message := formatPresenceMessage("alice", "joined", "")
+	if message != "alice joined" {
+		t.Fatalf("message is %q, want %q", message, "alice joined")
+	}
+}
+
+func TestSanitizeUserAgent(t *testing.T) {
+	raw := "Mozilla/5.0\r\ncurl\t8.0\x00test"
+	got := sanitizeUserAgent(raw)
+	if got != "Mozilla/5.0 curl 8.0test" {
+		t.Fatalf("sanitized user agent is %q", got)
+	}
+}
+
 func TestPersistenceOrderFlushAndHistoryLimit(t *testing.T) {
 	directory := t.TempDir()
 	messagesPath := filepath.Join(directory, "messages.txt")
