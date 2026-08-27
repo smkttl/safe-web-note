@@ -115,6 +115,26 @@ func TestSanitizeUserAgent(t *testing.T) {
 	}
 }
 
+func TestResolveUserAgentPrefersFrontendValue(t *testing.T) {
+	request := httptest.NewRequest("GET", "/ws?ua=Mozilla%2F5.0", nil)
+	request.Header.Set("User-Agent", "Go-http-client/1.1")
+
+	got := resolveUserAgent(request)
+	if got != "Mozilla/5.0" {
+		t.Fatalf("resolved user agent is %q, want %q", got, "Mozilla/5.0")
+	}
+}
+
+func TestResolveUserAgentFallsBackToHeader(t *testing.T) {
+	request := httptest.NewRequest("GET", "/ws", nil)
+	request.Header.Set("User-Agent", "Mozilla/5.0")
+
+	got := resolveUserAgent(request)
+	if got != "Mozilla/5.0" {
+		t.Fatalf("resolved user agent is %q, want %q", got, "Mozilla/5.0")
+	}
+}
+
 func TestPersistenceOrderFlushAndHistoryLimit(t *testing.T) {
 	directory := t.TempDir()
 	messagesPath := filepath.Join(directory, "messages.txt")

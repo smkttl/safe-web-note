@@ -200,6 +200,13 @@ func sanitizeUserAgent(raw string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
+func resolveUserAgent(r *http.Request) string {
+	if queryUA := sanitizeUserAgent(r.URL.Query().Get("ua")); queryUA != "" {
+		return queryUA
+	}
+	return sanitizeUserAgent(r.UserAgent())
+}
+
 func formatPresenceMessage(name, action, userAgent string) string {
 	if userAgent == "" {
 		return fmt.Sprintf("%s %s", name, action)
@@ -507,7 +514,7 @@ func (s *Server) handleWebSocketMode(w http.ResponseWriter, r *http.Request, rea
 		send:      make(chan []byte, 256),
 		id:        clientID,
 		name:      name,
-		userAgent: sanitizeUserAgent(r.UserAgent()),
+		userAgent: resolveUserAgent(r),
 		readOnly:  readOnly,
 		ctx:       ctx,
 		cancel:    cancel,

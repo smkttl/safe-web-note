@@ -383,7 +383,8 @@ function getWebSocketURL(){
   const loc = window.location;
   const scheme = (loc.protocol === 'https:') ? 'wss:' : 'ws:';
   const userParam = encodeURIComponent(username || '');
-  return `${scheme}//${loc.host}/ws?username=${userParam}`;
+  const uaParam = encodeURIComponent(navigator.userAgent || '');
+  return `${scheme}//${loc.host}/ws?username=${userParam}&ua=${uaParam}`;
 }
 function connect() {
   if (socket && socket.readyState === WebSocket.OPEN) {
