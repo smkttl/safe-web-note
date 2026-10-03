@@ -222,3 +222,43 @@ func TestPersistenceOrderFlushAndHistoryLimit(t *testing.T) {
 		t.Fatalf("close restarted server: %v", err)
 	}
 }
+func TestPersistenceReloadsLargeImageMessage(t *testing.T) {
+	directory := t.TempDir()
+	messagesPath := filepath.Join(directory, "messages.txt")
+	checkPath := filepath.Join(directory, "password_check.txt")
+	if err := os.WriteFile(checkPath, []byte("encrypted check token"), 0600); err != nil {
+		t.Fatalf("write check token: %v", err)
+	}
+
+	server, err := NewServer(messagesPath, checkPath)
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+	server.Start()
+
+	// A preserved animated GIF can persist a line well above the old 2 MiB
+	// scanner cap; the server must still replay it after a restart.
+	largeContent := strings.Repeat("A", 3*1024*1024)
+	server.incoming <- Message{
+		Content:   largeContent,
+		Timestamp: time.Unix(1, 0).UTC(),
+		SenderID:  "test-sender",
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("close server: %v", err)
+	}
+
+	restarted, err := NewServer(messagesPath, checkPath)
+	if err != nil {
+		t.Fatalf("restart server: %v", err)
+	}
+	defer restarted.Close()
+
+	if len(restarted.messages) != 1 {
+		t.Fatalf("restarted history contains %d messages, want 1", len(restarted.messages))
+	}
+	if restarted.messages[0].Content != largeContent {
+		t.Fatalf("restarted history content has length %d, want %d",
+			len(restarted.messages[0].Content), len(largeContent))
+	}
+}

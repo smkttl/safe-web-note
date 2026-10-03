@@ -23,6 +23,12 @@ import (
 const (
 	historyLimit     = 25
 	messageQueueSize = 256
+	// websocketReadLimit caps a single client message (encrypted payload).
+	websocketReadLimit = 4 * 1024 * 1024
+	// A persisted line is the JSON-encoded Message, which can grow once more
+	// through string escaping, so allow generous headroom above the read limit.
+	// The scanner only grows its buffer up to this cap when a line is that big.
+	historyLineLimit = websocketReadLimit * 8
 )
 
 // Message represents a chat message
@@ -270,7 +276,7 @@ func (s *Server) loadMessagesFromFile() error {
 	}
 
 	scanner := bufio.NewScanner(s.file)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), historyLineLimit)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -542,7 +548,7 @@ func (s *Server) readPump(client *Client) {
 		client.conn.Close()
 	}()
 
-	client.conn.SetReadLimit(4 * 1024 * 1024)
+	client.conn.SetReadLimit(websocketReadLimit)
 
 	for {
 		select {
