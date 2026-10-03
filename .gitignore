@@ -1,2 +1,6 @@
 messages.txt
 password_check.txt
+*.old
+*.bak
+safe-web-note-app
+.codex

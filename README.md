@@ -7,7 +7,12 @@ A tiny WebSocket chat with client-side AES-GCM encryption and a shared password.
 - Shared password login (small group use)
 - Message history persisted to `messages.txt`
 - On connect, server sends the last 25 messages
+- Image sharing: images are downscaled to fit 512px and sent as encrypted JPEG data URLs
+- Markdown-lite rendering for links and images
+- Ephemeral presence: online-user bar plus join/leave events with the sender's browser user agent
+- Unlinked read-only WebSocket endpoint for observers
 - Simple single-page UI served from `/`
+- Easter-egg message effects: `{shine}`, `{flash}`, and `{runaround}`
 
 ## Dependencies
 
@@ -74,8 +79,39 @@ sudo bash uninstall-service.sh
 
 ## How It Works
 - The browser derives a key from the password (PBKDF2) and encrypts each message using AES-GCM.
+- Each payload is `{sender, message}` JSON; `message` may contain text, a markdown link, or an embedded image.
 - The server writes encrypted messages to `messages.txt` through one ordered writer and flushes the queue during normal shutdown.
 - The server retains only the most recent 25 messages in memory and sends them to new connections.
+- Join/leave events and the online-user list are ephemeral: they are broadcast live but never persisted or replayed.
+- On plain HTTP to a non-`localhost` host, the page redirects to HTTPS because Web Crypto requires a secure context.
+
+## Endpoints
+
+| Path | Purpose |
+| --- | --- |
+| `/` | Single-page chat UI |
+| `/ws?username=<name>&ua=<ua>` | Read-write WebSocket |
+| `/ws-readonly` | Read-only WebSocket (see below) |
+| `/status` | Plain-text client count and total message count |
+| `/check` | Serves `password_check.txt` for the client-side password check |
+
+## Image Sharing
+
+Selecting an image attaches it to the next message. The client shrinks it to at
+most 512px on the long edge, re-encodes it as JPEG (quality 0.8), embeds it as a
+`data:` URL, and encrypts the whole payload like any other message. Only
+`data:image/*;base64` and `http(s)` image URLs are rendered.
+
+## Easter Eggs
+
+Messages whose text is wrapped in a command are rendered with a special effect:
+
+- `{shine}[text]` renders the text with an animated shimmer.
+- `{flash}[text]` alternates the text and background colors.
+- `{runaround}[text]` or `{runaround}(n)[text]` also spawns up to 20 text clones that bounce around the viewport, avoiding the UI controls.
+
+Commands are matched only when the whole message body is wrapped, and text
+containing a markdown image is ignored.
 
 ## Read-Only WebSocket
 
@@ -102,6 +138,8 @@ confidentiality still depends on the shared encryption password.
 - `main.go`: WebSocket server, persistence, history replay
 - `index.html`: UI + client-side crypto + WebSocket client
 - `messages.txt`: line-delimited encrypted messages
+- `password_check.txt`: encrypted token used to verify the shared password (gitignored)
+- `main_test.go`: server tests
 
 ## Notes / Limitations
 - The server is intentionally dumb and untrusted; it does not validate or decrypt content.
@@ -110,8 +148,9 @@ confidentiality still depends on the shared encryption password.
 
 ## TODO
 - Integrity (per-sender)
-- Image upload
 
 ## Development
 - Edit `index.html` for UI/crypto behavior.
+- Edit `main.go` for server behavior.
 - Restart the server after changes.
+- Run `go test ./...` to run the test suite; the WebSocket test binds a local port.
