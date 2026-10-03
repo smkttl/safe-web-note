@@ -102,6 +102,13 @@ most 512px on the long edge, re-encodes it as JPEG (quality 0.8), embeds it as a
 `data:` URL, and encrypts the whole payload like any other message. Only
 `data:image/*;base64` and `http(s)` image URLs are rendered.
 
+GIFs are special-cased to keep their animation: re-encoding through a canvas
+would retain only the first frame. A GIF is sent unchanged when the final
+encrypted WebSocket message fits the server's 4 MiB read limit. Because the
+payload is base64-encoded twice (image data URL, then the ciphertext), that works
+out to roughly a 2.25 MB raw GIF. Larger GIFs prompt to either cancel the send or
+convert to a still JPEG via the normal downscale path.
+
 ## Easter Eggs
 
 Messages whose text is wrapped in a command are rendered with a special effect:

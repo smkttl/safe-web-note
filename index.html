@@ -104,7 +104,12 @@
             width: 320px;
             text-align: center;
         }
-        #popupPanel button {
+        #popupActions {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+        #popupActions button {
             margin-top: 12px;
         }
         @keyframes repeatShine {
@@ -152,7 +157,10 @@
     <div id="popupBackdrop"></div>
     <div id="popupPanel">
         <div id="popupMessage"></div>
-        <button onclick="closePopup();">OK</button>
+        <div id="popupActions">
+            <button id="popupCancelButton" style="display: none;" onclick="finishPopup(false);">Cancel</button>
+            <button id="popupOkButton" onclick="finishPopup(true);">OK</button>
+        </div>
     </div>
     <script>
 if (window.location.protocol === 'http:' &&
@@ -175,13 +183,35 @@ const onlineUsersBar=document.getElementById('onlineUsersBar');
 const maxImageEdge = 512;
 const jpegQuality = 0.8;
 const maxRunaroundClones = 20;
-function showPopup(message){
+const maxWireMessageSize = 4 * 1024 * 1024;
+let pendingConfirmResolve = null;
+function openPopup(message, options){
+  const isConfirm = !!(options && options.confirm);
   const panel = document.getElementById('popupPanel');
   const backdrop = document.getElementById('popupBackdrop');
   const msg = document.getElementById('popupMessage');
+  const cancelButton = document.getElementById('popupCancelButton');
+  const okButton = document.getElementById('popupOkButton');
   msg.textContent = message;
+  cancelButton.style.display = isConfirm ? 'inline-block' : 'none';
+  okButton.textContent = isConfirm ? 'Convert to JPEG' : 'OK';
   panel.style.display = 'block';
   backdrop.style.display = 'block';
+}
+function showPopup(message){
+  openPopup(message, null);
+}
+function confirmPopup(message){
+  return new Promise(resolve => {
+    pendingConfirmResolve = resolve;
+    openPopup(message, {confirm: true});
+  });
+}
+function finishPopup(confirmed){
+  const resolve = pendingConfirmResolve;
+  pendingConfirmResolve = null;
+  closePopup();
+  if(resolve){resolve(!!confirmed);}
 }
 function closePopup(){
   const panel = document.getElementById('popupPanel');
@@ -341,19 +371,47 @@ function canvasToJpegDataUrl(canvas) {
           reject(new Error('Failed to encode image'));
           return;
         }
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error('Failed to read encoded image'));
-        reader.readAsDataURL(blob);
+        readFileAsDataUrl(blob).then(resolve, reject);
       }, 'image/jpeg', jpegQuality);
       return;
     }
     resolve(canvas.toDataURL('image/jpeg', jpegQuality));
   });
 }
-async function imageFileToMarkdown(file) {
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.readAsDataURL(file);
+  });
+}
+function wireMessageSize(messageText) {
+  const payload = JSON.stringify({sender: username, message: messageText});
+  const plaintextBytes = new TextEncoder().encode(payload).length;
+  // AES-GCM adds a 12-byte IV and a 16-byte tag; the result is base64-encoded.
+  return 4 * Math.ceil((plaintextBytes + 28) / 3);
+}
+const abortSend = new Error('Send aborted');
+async function imageFileToMarkdown(file, textBefore) {
   if(!file || !file.type || !file.type.startsWith('image/')){
     throw new Error('Please choose an image file.');
+  }
+
+  if(file.type === 'image/gif'){
+    // Re-encoding through a canvas would drop every frame but the first, so
+    // keep the original bytes when the encrypted message still fits the limit.
+    const gifDataUrl = await readFileAsDataUrl(file);
+    const gifMarkdown = `![](${gifDataUrl})`;
+    const fullMessage = textBefore ? `${textBefore}\n${gifMarkdown}` : gifMarkdown;
+    if(wireMessageSize(fullMessage) <= maxWireMessageSize){
+      return gifMarkdown;
+    }
+    const convert = await confirmPopup(
+      'This GIF is too large to keep animated. Convert it to a still JPEG?');
+    if(!convert){
+      throw abortSend;
+    }
   }
 
   const img = await loadImageFromFile(file);
@@ -468,13 +526,14 @@ async function sendMessage() {
   try {
     const parts = [];
     if(value){parts.push(value);}
-    if(imageFile){parts.push(await imageFileToMarkdown(imageFile));}
+    if(imageFile){parts.push(await imageFileToMarkdown(imageFile, value));}
     const payload=JSON.stringify({sender: username, message: parts.join('\n')});
     const message=await encryptMessage(key,payload);
     socket.send(message);
     input.value='';
     imageInput.value='';
   } catch(e) {
+    if(e === abortSend){return;}
     console.error('Failed to send message:', e);
     showPopup(e && e.message ? `Failed to send message: ${e.message}` : 'Failed to send message.');
   } finally {
